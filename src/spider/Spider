@@ -1,0 +1,149 @@
+const path = require('path');
+const fs = require('fs');
+
+const {FileUtil} = require('../utils/FileUtil');
+const {CueParser} = require('../parser/CueParser');
+const {AlbumInfo} = require('../data/AlbumInfo');
+const {SingleCDInfo} = require('../data/SingleCDInfo');
+const { DBManager } = require('../db/DBManager');
+
+const BOXSET_DIRS = [];
+const ALBUM_DIRS = [];
+
+class Spider {
+    constructor(rootDirs, db) {
+        this.rootDirs = rootDirs;
+        this.fileUtil = new FileUtil();
+        this.cueParser = new CueParser();
+        this.dbManager = db;
+    }
+
+    begin() {
+        while (this.rootDirs.length > 0) {
+            let root = this.rootDirs.pop();
+            let parentFolder = path.dirname(root);
+            let folderName = path.basename(root);
+            if (this.fileUtil.isBoxsetFolder(root)) {
+                let boxset = this.__parseBoxset(parentFolder, folderName);
+                console.log(boxset.toString());
+                if (null != boxset) {
+                    BOXSET_DIRS.push(root);
+                    this.dbManager.insertAlbum(boxset);
+                }
+            } else {
+                if (this.fileUtil.isSingleAlbumFolder(root)) {
+                    let album = this.__parseAlbum(parentFolder, folderName);
+                    console.log(album.toString());
+                    if (null != album) {
+                        ALBUM_DIRS.push(root);
+                        this.dbManager.insertAlbum(album);
+                    }
+                }
+
+                let files = fs.readdirSync(root);
+                for (let filename of files) {
+                    let filePath = path.join(root, filename);
+                    let stats = fs.statSync(filePath);
+                    if (stats.isDirectory()) {
+                        this.rootDirs.push(filePath);
+                    }
+                }
+            }
+        }
+        console.log("Box set num: " + BOXSET_DIRS.length);
+        console.log("Album num: " + ALBUM_DIRS.length);
+    }
+
+    /**
+     * Parse the many cds boxset info, including some single cd.
+     * @param parentFolder
+     * @param filename
+     */
+    __parseBoxset(parentFolder, filename) {
+        let folderPath = path.join(parentFolder, filename);
+        let cdinfos = [];
+        let files = fs.readdirSync(folderPath);
+        for (let filename of files) {
+            let filePath = path.join(folderPath, filename);
+            let stats = fs.statSync(filePath);
+            if (stats.isDirectory()) {
+                let musicFileType = this.fileUtil.getMusicFileType(filePath);
+                if (0 != musicFileType.length) {
+                    let result = this.__parseMusicFolder(folderPath, filename, musicFileType);
+                    if (null != result) {
+                        cdinfos.push(result);
+                    }
+                }
+            }
+        }
+
+        let cover = this.fileUtil.getCoverImage(folderPath);
+        let boxsetInfo = new AlbumInfo(filename, parentFolder, cover, cdinfos);
+        return boxsetInfo;
+    }
+
+    /**
+     * Parse a one cd boxset info,that is a album.
+     * @param parentFolder
+     * @param filename
+     */
+    __parseAlbum(parentFolder, filename) {
+        let folderPath = path.join(parentFolder, filename);
+        let musicFileType = this.fileUtil.getMusicFileType(folderPath);
+        if (0 != musicFileType.length) {
+            let cd_info = this.__parseMusicFolder(parentFolder, filename, musicFileType);
+            let cd_list = [];
+            cd_list.push(cd_info);
+            let cover = this.fileUtil.getCoverImage(folderPath);
+            let boxsetInfo = new AlbumInfo(filename, parentFolder, cover, cd_list);
+            return boxsetInfo;
+        }
+        return null;
+    }
+
+    /**
+     * Parse a music folder.
+     * @param folderPath
+     */
+    __parseMusicFolder(parentFolder, filename, losslessType) {
+        let performer = '';
+        let trackList = [];
+        let type, title;
+
+        let folderPath = path.join(parentFolder, filename);
+        let playlist = this.fileUtil.getPlayListFile(folderPath);
+        if (playlist.hasOwnProperty('m3u8')) {
+            // TODO: parse m3u8
+        } else if (playlist.hasOwnProperty('utf8_cue') ||
+            playlist.hasOwnProperty('cue')) {
+            // utf8_cue is the highest priority.
+            let cuefile = null;
+            if (playlist.hasOwnProperty('utf8_cue')) {
+                cuefile = playlist['utf8_cue'];
+            } else if (playlist.hasOwnProperty('cue')) {
+                cuefile = playlist['cue'];
+            }
+
+            if (null != cuefile) {
+                let cuesheet = this.cueParser.parseCue(cuefile);
+                if ((null != cuesheet) && (null != cuesheet.files) && (cuesheet.files.length > 0) && (cuesheet.files[0].length > 0)) {
+                    performer = cuesheet.performer;
+                    for (let track of cuesheet.files[0].tracks) {
+                        trackList.push(track.title);
+                    }
+                }
+            }
+        } else {
+            let files = this.fileUtil.getTrackList(folderPath);
+            trackList = [...files];
+        }
+
+        type = losslessType;
+        title = filename;
+        let cover = this.fileUtil.getCoverImage(folderPath);
+        let cdInfo = new SingleCDInfo(title, folderPath, performer, type, cover, trackList);
+        return cdInfo;
+    }
+};
+
+exports.Spider = Spider;

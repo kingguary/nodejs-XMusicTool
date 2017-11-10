@@ -1,0 +1,14 @@
+{
+  "name": "MusicScanner",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "node ./src/App.js"
+  },
+  "dependencies": {
+    "cue-parser": "0.0.4",
+    "gm": "^1.23.0",
+    "mongodb": "^2.2.33",
+    "mongoskin": "~2.1.0"
+  }
+}
